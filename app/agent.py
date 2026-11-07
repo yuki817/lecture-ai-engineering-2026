@@ -33,7 +33,9 @@ INSTRUCTIONS = """\
 - 用語や講座に固有のことを答える前に、必ず search_glossary で用語集を確認する。
 - 回の内容を聞かれたら get_lecture_summary を使う。
 - 確認問題を求められたら make_quiz を使う。
+- 今日の学習内容や作業の振り返りを求められたら get_today_commits を使う。コミットタイトルと変更ファイル名だけを根拠に要約し、分からない変更内容を推測しない。結果が空なら、今日のコミットが見つからなかったと伝える。
 - 学習の記録を保存するよう頼まれたら save_learning_log を使う。
+- 今日のコミットをもとに学習記録の保存も頼まれたら、get_today_commits の情報から要約案を作り、その案を save_learning_log に渡す。保存前に表示される本文を利用者が確認・承認できるようにし、コミット情報から分からない内容は追加しない。
 - 用語集に見つからないことは、推測で断定せず「用語集にはない」と伝える。
 - 回答の最後に、関係する回（第N回）を示す。
 - 宿題の答えそのものは書かず、考え方のヒントで導く。
@@ -44,6 +46,7 @@ agent = Agent(instructions=INSTRUCTIONS, output_type=[str, DeferredToolRequests]
 agent.tool_plain(tools.search_glossary)
 agent.tool_plain(tools.get_lecture_summary)
 agent.tool_plain(tools.make_quiz)
+agent.tool_plain(tools.get_today_commits)
 agent.tool_plain(tools.save_learning_log, requires_approval=True)
 
 # 第5回: 使う MCP サーバーの設定ファイル。Claude Desktop や Cursor と同じ "mcpServers" 形式
@@ -124,8 +127,19 @@ def resolve_approval_requests(target: Agent, result, model):
     approvals = {}
     for call in requests.approvals:
         print(f"\n{call.tool_name} の実行には承認が必要です。")
-        print(call.args)
-        answer = input("実行を承認しますか？ [y/N]: ").strip().casefold()
+        if (
+            call.tool_name == "save_learning_log"
+            and isinstance(call.args, dict)
+            and isinstance(call.args.get("content"), str)
+        ):
+            print("--- 保存する学習記録 ---")
+            print(call.args["content"])
+            print("------------------------")
+            prompt = "この内容を保存しますか？ [y/N]: "
+        else:
+            print(call.args)
+            prompt = "このツールの実行を承認しますか？ [y/N]: "
+        answer = input(prompt).strip().casefold()
         approvals[call.tool_call_id] = (
             True if answer in {"y", "yes"} else ToolDenied("利用者が実行を拒否しました。")
         )

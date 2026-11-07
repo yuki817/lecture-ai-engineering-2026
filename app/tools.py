@@ -4,14 +4,16 @@
 説明文を書き換えると、モデルがツールを使うかどうか・どんな引数で呼ぶかが変わる。
 """
 
-from datetime import datetime
+from datetime import datetime, time, timedelta
 import json
 import random
+import subprocess
 from functools import cache
 from pathlib import Path
 from uuid import uuid4
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+REPO_DIR = Path(__file__).resolve().parent.parent
 LEARNING_LOG_DIR = Path(__file__).resolve().parent.parent / "learning_log"
 MAX_RESULTS = 3
 
@@ -116,10 +118,48 @@ def make_quiz(lecture: int) -> str:
     )
 
 
+def get_today_commits() -> str:
+    """今日の学習内容を振り返りたいとき、今日のコミットタイトルと変更ファイル名を返す。
+
+    日付は実行環境のローカルタイムゾーンを使う。差分本文は読み取らないため、
+    要約ではコミットタイトルとファイル名から分かる範囲を超えて断定しない。
+    """
+    today = datetime.now().astimezone().date()
+    start = datetime.combine(today, time.min).astimezone().isoformat()
+    end = datetime.combine(today + timedelta(days=1), time.min).astimezone().isoformat()
+    result = subprocess.run(
+        [
+            "git",
+            "log",
+            f"--since={start}",
+            f"--until={end}",
+            "--format=%H%x1f%s",
+            "--name-only",
+        ],
+        cwd=REPO_DIR,
+        capture_output=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    commits = []
+    current = None
+    for line in result.stdout.splitlines():
+        if "\x1f" in line:
+            commit_hash, title = line.split("\x1f", 1)
+            current = {"commit": commit_hash[:7], "title": title, "files": []}
+            commits.append(current)
+        elif line and current is not None:
+            current["files"].append(line)
+
+    return json.dumps(commits, ensure_ascii=False)
+
+
 def save_learning_log(content: str) -> str:
     """利用者が学んだことを記録したいときに、学習ログを Markdown ファイルに保存する。
 
-    保存は利用者の承認を得てから実行する。content には保存する記録の本文を入れる。
+    エージェントには requires_approval=True で登録し、承認後にだけこの関数を実行する。
+    content には利用者が確認する保存本文を入れる。
     """
     if not content.strip():
         raise ValueError("学習記録の内容が空です。")

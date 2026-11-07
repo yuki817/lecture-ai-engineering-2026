@@ -43,6 +43,15 @@ def test_glossary_result_reaches_the_model():
     assert returns and returns[0].tool_name == "search_glossary"
 
 
+def test_today_commit_summary_tool_is_available_to_the_agent():
+    model = TestModel(call_tools=[])
+    with agent.override(model=model):
+        agent.run_sync("今日の作業内容を振り返って")
+
+    offered = {tool.name for tool in model.last_model_request_parameters.function_tools}
+    assert "get_today_commits" in offered
+
+
 def test_save_learning_log_waits_for_approval(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path)
     model = TestModel(call_tools=["save_learning_log"])
@@ -54,7 +63,7 @@ def test_save_learning_log_waits_for_approval(tmp_path, monkeypatch):
     assert not list(tmp_path.iterdir())
 
 
-def test_approved_learning_log_is_saved(tmp_path, monkeypatch):
+def test_approved_learning_log_is_saved_exactly_as_shown(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path)
     monkeypatch.setattr("builtins.input", lambda _: "y")
     model = TestModel(call_tools=["save_learning_log"])
@@ -65,7 +74,11 @@ def test_approved_learning_log_is_saved(tmp_path, monkeypatch):
     result = resolve_approval_requests(agent, pending, TestModel(call_tools=[]))
 
     assert isinstance(result.output, str)
-    assert len(list(tmp_path.glob("*.md"))) == 1
+    content = pending.output.approvals[0].args["content"]
+    saved_files = list(tmp_path.glob("*.md"))
+    assert len(saved_files) == 1
+    assert saved_files[0].read_text(encoding="utf-8") == content
+    assert content in capsys.readouterr().out
 
 
 def test_denied_learning_log_is_not_saved(tmp_path, monkeypatch):
