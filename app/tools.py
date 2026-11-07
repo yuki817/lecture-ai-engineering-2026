@@ -4,11 +4,17 @@
 説明文を書き換えると、モデルがツールを使うかどうか・どんな引数で呼ぶかが変わる。
 """
 
+from datetime import datetime, time, timedelta
 import json
+import random
+import subprocess
 from functools import cache
 from pathlib import Path
+from uuid import uuid4
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+REPO_DIR = Path(__file__).resolve().parent.parent
+LEARNING_LOG_DIR = Path(__file__).resolve().parent.parent / "learning_log"
 MAX_RESULTS = 3
 
 
@@ -77,3 +83,89 @@ def get_lecture_summary(lecture: int) -> str:
         available = sorted(p.stem for p in (DATA_DIR / "lectures").glob("*.md"))
         return f"第{lecture}回の要点はまだありません。用意されている回: {', '.join(available)}"
     return path.read_text(encoding="utf-8")
+
+
+def make_quiz(lecture: int) -> str:
+    """指定した回の用語から 1つを選び、確認問題と答えを返す。
+
+    「第2回の確認問題を出して」のように、学習内容を確認したいときに使う。
+    lecture には 1 始まりの回数を入れる。
+    """
+    glossary = load_glossary()
+    lecture_terms = [entry for entry in glossary if entry.get("lecture") == lecture]
+
+    if not lecture_terms:
+        available = sorted({entry["lecture"] for entry in glossary})
+        message = (
+            f"第{lecture}回の用語はまだ登録されていません。"
+            f"利用可能な回: {', '.join(str(v) for v in available)}"
+        )
+        return json.dumps(
+            {
+                "question": f"第{lecture}回の確認問題を作れません。",
+                "answer": message,
+            },
+            ensure_ascii=False,
+        )
+
+    term = random.choice(lecture_terms)
+    return json.dumps(
+        {
+            "question": f"「{term['term']}」の意味は？",
+            "answer": term["definition"],
+        },
+        ensure_ascii=False,
+    )
+
+
+def get_today_commits() -> str:
+    """今日の学習内容を振り返りたいとき、今日のコミットタイトルと変更ファイル名を返す。
+
+    日付は実行環境のローカルタイムゾーンを使う。差分本文は読み取らないため、
+    要約ではコミットタイトルとファイル名から分かる範囲を超えて断定しない。
+    """
+    today = datetime.now().astimezone().date()
+    start = datetime.combine(today, time.min).astimezone().isoformat()
+    end = datetime.combine(today + timedelta(days=1), time.min).astimezone().isoformat()
+    result = subprocess.run(
+        [
+            "git",
+            "log",
+            f"--since={start}",
+            f"--until={end}",
+            "--format=%H%x1f%s",
+            "--name-only",
+        ],
+        cwd=REPO_DIR,
+        capture_output=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    commits = []
+    current = None
+    for line in result.stdout.splitlines():
+        if "\x1f" in line:
+            commit_hash, title = line.split("\x1f", 1)
+            current = {"commit": commit_hash[:7], "title": title, "files": []}
+            commits.append(current)
+        elif line and current is not None:
+            current["files"].append(line)
+
+    return json.dumps(commits, ensure_ascii=False)
+
+
+def save_learning_log(content: str) -> str:
+    """利用者が学んだことを記録したいときに、学習ログを Markdown ファイルに保存する。
+
+    エージェントには requires_approval=True で登録し、承認後にだけこの関数を実行する。
+    content には利用者が確認する保存本文を入れる。
+    """
+    if not content.strip():
+        raise ValueError("学習記録の内容が空です。")
+
+    LEARNING_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f%z")
+    path = LEARNING_LOG_DIR / f"{timestamp}-{uuid4().hex}.md"
+    path.write_text(content, encoding="utf-8")
+    return f"学習記録を learning_log/{path.name} に保存しました。"

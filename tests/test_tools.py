@@ -1,6 +1,7 @@
 """ツールのテスト（LLMもAPIキーも使わない）。"""
 
 import json
+from types import SimpleNamespace
 
 from app import tools
 
@@ -46,3 +47,44 @@ def test_default_question_of_lecture1_is_answerable_from_glossary():
     assert "3レベル" in DEFAULT_QUESTION
     hits = json.loads(tools.search_glossary("3レベル"))
     assert hits[0]["term"] == "宿題の3レベル"
+
+
+def test_get_today_commits_returns_titles_and_file_names(monkeypatch):
+    output = (
+        "abcdef012345\x1f学習ログ保存を追加\n"
+        "app/tools.py\n"
+        "tests/test_tools.py\n\n"
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout=output)
+
+    monkeypatch.setattr(tools.subprocess, "run", fake_run)
+
+    commits = json.loads(tools.get_today_commits())
+
+    assert commits == [
+        {
+            "commit": "abcdef0",
+            "title": "学習ログ保存を追加",
+            "files": ["app/tools.py", "tests/test_tools.py"],
+        }
+    ]
+    command, kwargs = calls[0]
+    assert command[0:2] == ["git", "log"]
+    assert any(arg.startswith("--since=") for arg in command)
+    assert any(arg.startswith("--until=") for arg in command)
+    assert kwargs["cwd"] == tools.REPO_DIR
+    assert kwargs["check"] is True
+
+
+def test_get_today_commits_returns_empty_list_when_none_found(monkeypatch):
+    monkeypatch.setattr(
+        tools.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout=""),
+    )
+
+    assert json.loads(tools.get_today_commits()) == []
