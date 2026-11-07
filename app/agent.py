@@ -16,7 +16,7 @@ import inspect
 import json
 from pathlib import Path
 
-from pydantic_ai import Agent, DeferredToolRequests
+from pydantic_ai import Agent, DeferredToolRequests, ToolDenied
 from pydantic_ai.exceptions import ModelHTTPError
 from fastmcp import Client
 from pydantic_ai.mcp import MCPToolset, StdioTransport
@@ -33,6 +33,7 @@ INSTRUCTIONS = """\
 - 用語や講座に固有のことを答える前に、必ず search_glossary で用語集を確認する。
 - 回の内容を聞かれたら get_lecture_summary を使う。
 - 確認問題を求められたら make_quiz を使う。
+- 学習の記録を保存するよう頼まれたら save_learning_log を使う。
 - 用語集に見つからないことは、推測で断定せず「用語集にはない」と伝える。
 - 回答の最後に、関係する回（第N回）を示す。
 - 宿題の答えそのものは書かず、考え方のヒントで導く。
@@ -110,6 +111,32 @@ def print_trace(result) -> None:
     print(f"[usage] {result.usage}")
 
 
+def resolve_approval_requests(target: Agent, result, model):
+    """承認待ちのツール呼び出しを利用者に確認し、結果を渡してエージェントを再開する。"""
+    requests = result.output
+    if not isinstance(requests, DeferredToolRequests):
+        return result
+    if requests.calls:
+        raise RuntimeError("承認以外の保留中ツール呼び出しには対応していません。")
+    if not requests.approvals:
+        raise RuntimeError("承認待ちのツール呼び出しが見つかりません。")
+
+    approvals = {}
+    for call in requests.approvals:
+        print(f"\n{call.tool_name} の実行には承認が必要です。")
+        print(call.args)
+        answer = input("実行を承認しますか？ [y/N]: ").strip().casefold()
+        approvals[call.tool_call_id] = (
+            True if answer in {"y", "yes"} else ToolDenied("利用者が実行を拒否しました。")
+        )
+
+    return target.run_sync(
+        message_history=result.all_messages(),
+        deferred_tool_results=requests.build_results(approvals=approvals),
+        model=model,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="学習支援エージェントに質問する")
     parser.add_argument("question", nargs="?")
@@ -129,7 +156,10 @@ def main() -> None:
     if args.mcp:
         print("[tools] MCP サーバー（app/mcp_servers.json）")
     try:
-        result = target.run_sync(args.question, model=build_model())
+        model = build_model()
+        result = target.run_sync(args.question, model=model)
+        while isinstance(result.output, DeferredToolRequests):
+            result = resolve_approval_requests(target, result, model)
     except ModelHTTPError as e:
         print(api_error_message(e.status_code, str(e.body)[:200]))
         raise SystemExit(1)

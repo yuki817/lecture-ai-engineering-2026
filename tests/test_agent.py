@@ -10,7 +10,7 @@ from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 from pydantic_ai.models.test import TestModel
 
 from app import tools
-from app.agent import agent
+from app.agent import agent, resolve_approval_requests
 
 BASE_TOOLS = {"search_glossary", "get_lecture_summary"}
 
@@ -51,4 +51,32 @@ def test_save_learning_log_waits_for_approval(tmp_path, monkeypatch):
 
     assert isinstance(result.output, DeferredToolRequests)
     assert [call.tool_name for call in result.output.approvals] == ["save_learning_log"]
+    assert not list(tmp_path.iterdir())
+
+
+def test_approved_learning_log_is_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    model = TestModel(call_tools=["save_learning_log"])
+    with agent.override(model=model):
+        pending = agent.run_sync("今日の学びを記録に保存してください。")
+    assert isinstance(pending.output, DeferredToolRequests)
+
+    result = resolve_approval_requests(agent, pending, TestModel(call_tools=[]))
+
+    assert isinstance(result.output, str)
+    assert len(list(tmp_path.glob("*.md"))) == 1
+
+
+def test_denied_learning_log_is_not_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    model = TestModel(call_tools=["save_learning_log"])
+    with agent.override(model=model):
+        pending = agent.run_sync("今日の学びを記録に保存してください。")
+    assert isinstance(pending.output, DeferredToolRequests)
+
+    result = resolve_approval_requests(agent, pending, TestModel(call_tools=[]))
+
+    assert isinstance(result.output, str)
     assert not list(tmp_path.iterdir())
