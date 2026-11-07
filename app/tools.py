@@ -4,12 +4,15 @@
 説明文を書き換えると、モデルがツールを使うかどうか・どんな引数で呼ぶかが変わる。
 """
 
+from datetime import datetime
 import json
 import random
 from functools import cache
 from pathlib import Path
+from uuid import uuid4
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+LEARNING_LOG_DIR = Path(__file__).resolve().parent.parent / "learning_log"
 MAX_RESULTS = 3
 
 
@@ -111,3 +114,18 @@ def make_quiz(lecture: int) -> str:
         },
         ensure_ascii=False,
     )
+
+
+def save_learning_log(content: str) -> str:
+    """利用者が学んだことを記録したいときに、学習ログを Markdown ファイルに保存する。
+
+    保存は利用者の承認を得てから実行する。content には保存する記録の本文を入れる。
+    """
+    if not content.strip():
+        raise ValueError("学習記録の内容が空です。")
+
+    LEARNING_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f%z")
+    path = LEARNING_LOG_DIR / f"{timestamp}-{uuid4().hex}.md"
+    path.write_text(content, encoding="utf-8")
+    return f"学習記録を learning_log/{path.name} に保存しました。"
