@@ -54,3 +54,33 @@ def test_existing_index_survives_failed_rebuild(materials):
         build_index(source, database, rebuild=True, embedder=embed)
     assert database.read_bytes() == before
     assert not list(database.parent.glob(".rag-build-*"))
+
+
+def test_search_results_include_neighbor_pages(tmp_path, monkeypatch):
+    source = tmp_path / "lectures.json"
+    source.write_text(json.dumps([
+        {"id": "lec01-main", "title": "講義1", "content": [
+            {"section": "章", "content": [
+                {"id": "lec01-main-p001", "title": "前", "page": 1, "content": "本文1"},
+                {"id": "lec01-main-p002", "title": "ヒット", "page": 2, "content": "本文2"},
+                {"id": "lec01-main-p003", "title": "次", "page": 3, "content": "本文3"},
+            ]}
+        ]}
+    ], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(retrieval, "RAG_SOURCE", source)
+
+    results = retrieval.add_neighbor_pages([{
+        "page_id": "lec01-main-p002",
+        "document_id": "lec01-main",
+        "page": 2,
+        "content": "本文2",
+    }])
+
+    assert [page["page_id"] for page in results[0]["neighbor_pages"]] == [
+        "lec01-main-p001",
+        "lec01-main-p003",
+    ]
+    assert [page["relation"] for page in results[0]["neighbor_pages"]] == [
+        "previous_page",
+        "next_page",
+    ]
