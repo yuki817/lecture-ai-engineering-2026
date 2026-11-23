@@ -84,6 +84,36 @@ def read_page(page_id: str) -> dict:
     raise ValueError("対象のページが見つかりません。")
 
 
+def add_neighbor_pages(results: list[dict]) -> list[dict]:
+    """各検索ヒットに、同じ資料内の前後1ページを重複なく付け加える。"""
+    pages = load_pages(RAG_SOURCE)
+    document_pages = defaultdict(list)
+    for page in pages:
+        document_pages[page["document_id"]].append(page)
+
+    result_ids = {result["page_id"] for result in results}
+    for result in results:
+        neighbors = []
+        document = document_pages[result["document_id"]]
+        hit_index = next(
+            (i for i, page in enumerate(document) if page["page_id"] == result["page_id"]),
+            None,
+        )
+        if hit_index is None:
+            result["neighbor_pages"] = []
+            continue
+        for neighbor_index in (hit_index - 1, hit_index + 1):
+            if 0 <= neighbor_index < len(document):
+                neighbor = document[neighbor_index]
+                if neighbor["page_id"] not in result_ids:
+                    neighbors.append({
+                        **neighbor,
+                        "relation": "previous_page" if neighbor_index < hit_index else "next_page",
+                    })
+        result["neighbor_pages"] = neighbors
+    return results
+
+
 def normalized_vector(values: list[float]) -> list[float]:
     """ベクトルの長さを1に揃える。"""
     norm = math.hypot(*values)
@@ -135,7 +165,7 @@ def search(query: str) -> list[dict]:
                    vec_distance_cosine(embedding, ?) AS distance
             FROM chunks ORDER BY distance, page_id LIMIT ?
         """, (sqlite_vec.serialize_float32(vector), RAG_TOP_K))
-        return [dict(row) for row in rows]
+        return add_neighbor_pages([dict(row) for row in rows])
 
 
 def search_graph(query: str) -> dict:
@@ -208,4 +238,13 @@ if __name__ == "__main__":
         print(f"章: {result['section']}")
         print(f"タイトル: {result['title']}")
         print(f"ページ: {result['page']}")
+
         print(f"\n{result['content']}")
+        for neighbor in result["neighbor_pages"]:
+            relation = "前ページ" if neighbor["relation"] == "previous_page" else "次ページ"
+            print(f"\n[{relation}]")
+            print(f"講義: {neighbor['document_title']}")
+            print(f"章: {neighbor['section']}")
+            print(f"タイトル: {neighbor['title']}")
+            print(f"ページ: {neighbor['page']}")
+            print(f"\n{neighbor['content']}")
